@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+
+import os
+import glob
+from datetime import datetime
+from string import Template
+import argparse
+import sys
+import platform
+
+def get_creation_date(file):
+    """
+    Getting creation date is fiddly, see
+    < http://stackoverflow.com/a/39501288/1709587 >
+    """
+    if platform.system() == 'Windows':
+        return os.path.getctime(file)
+    else:
+        stat = os.stat(file)
+
+        try:
+            return stat.st_birthtime
+        except AttributeError:
+            # We're probably on Linux. No easy way to get creation dates here,
+            # so we'll settle for when its content was last modified.
+            return stat.st_mtime
+
+def timestamp_to_iso8601(timestamp):
+    time = datetime.fromtimestamp(timestamp)
+    return str(time).replace(" ", "T").replace(":", "")[0:-2]
+
+class Remonik:
+    def __init__(self, parser, args):
+        self.parser = parser
+
+        for key, val in vars(args).items():
+            setattr(self, key, val)
+
+        if self.dry_run:
+            self.verbose = True
+            self.log("Doing a dry run")
+
+    def run(self):
+        self.log("Renaming path '%s'" % self.path)
+
+        if self.sequential:
+            self.sequential_rename()
+        elif self.chronological:
+            self.chronological_rename()
+        else:
+            self.parser.print_help()
+
+    def rename(self, old, new):
+        self.log("Renaming '%s' to '%s'" % (old, new))
+
+        if not self.dry_run:
+            os.rename(old, new)
+
+    def sequential_rename(self):
+        for i, path in enumerate(glob.glob(self.path)):
+            index = str(i + 1)
+
+            if self.leading_zeroes:
+                index = index.zfill(self.leading_zeroes)
+
+            filename = str(index)
+
+            if self.prefix:
+                filename = "%s%s" % (self.prefix, filename)
+
+            if self.suffix:
+                filename = "%s%s" % (filename, self.suffix)
+
+            fname, extension = os.path.splitext(path)
+            renamed = "%s%s" % (filename, extension)
+            self.rename(path, renamed)
+
+    def log(self, s):
+        if self.verbose:
+            print(s)
+
+    def chronological_rename(self):
+        for f in glob.glob(self.path):
+            if os.path.islink(f):
+                self.log("Symbolic links are not renamed, skipping")
+                continue
+
+            file, extension = os.path.splitext(f)
+            timestamp = get_creation_date(f)
+
+            filename = timestamp_to_iso8601(timestamp)
+
+            if not self.no_old_filename:
+                filename += "_" + file
+
+            if self.prefix:
+                filename = "%s_%s" % (self.prefix, filename)
+
+            if self.suffix:
+                filename = "%s_%s" % (filename, self.suffix)
+
+            filename += extension.lower()
+
+            self.log("Renaming '%s' to '%s'" % (f, filename))
+
+            # File exists?
+            if os.path.isfile(filename):
+                sys.exit("File exists: '%s', aborting" % filename)
+
+            self.rename(f, filename)
+
+def main():
+    parser = argparse.ArgumentParser(description = "Fancy batch rename utility")
+    parser.add_argument("path", type = str, default="*", nargs='?', help="Path to parse (can includ wildcards)")
+    parser.add_argument("-s", "--sequential", action="store_true", help="Rename files sequentially")
+    parser.add_argument("-c", "--chronological", action="store_true", help="Rename files chronologically")
+    parser.add_argument("-lz", "--leading-zeroes", type=int, help="How many leading zeroes do you want?")
+    parser.add_argument("-v", "--verbose", action="store_true", default=False, help="Show debug information")
+    parser.add_argument("-pf", "--prefix", help="Put this in front of the filename")
+    parser.add_argument("-sf", "--suffix", help="Put this at the end of the filename")
+    parser.add_argument("-d", "--dry-run", action="store_true", help="Show what will be renamed, but don't do it, implies -v")
+    parser.add_argument("-no", "--no-old-filename", action="store_true", help="Don't put the old filename in the new filename when renaming")
+    args = parser.parse_args()
+
+    remonik = Remonik(parser, args)
+    remonik.run()
+
+if __name__ == "__main__":
+    main()
